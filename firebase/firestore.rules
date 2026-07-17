@@ -1,0 +1,308 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+function isAuthenticated() {
+  return request.auth != null;
+}
+
+function getUserData() {
+  return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+}
+
+function isRole(role) {
+  return isAuthenticated() && getUserData().role == role;
+}
+
+function isInRole(roles) {
+  return isAuthenticated() && roles.hasAny([getUserData().role]);
+}
+
+function isSchoolAdmin(schoolId) {
+  return isAuthenticated() && getUserData().schoolId == schoolId && ['super_admin', 'school_admin', 'principal', 'vice_principal', 'admin_officer'].hasAny([getUserData().role]);
+}
+
+function isOwner(userId) {
+  return isAuthenticated() && request.auth.uid == userId;
+}
+
+function isSuperAdmin() {
+  return isRole('super_admin');
+}
+
+function isSchoolStaff() {
+  return isAuthenticated() && ['super_admin', 'school_admin', 'principal', 'vice_principal', 'admin_officer', 'accountant', 'teacher', 'class_teacher', 'librarian', 'receptionist', 'transport', 'hostel_warden'].hasAny([getUserData().role]);
+}
+
+function isAcademicStaff() {
+  return isAuthenticated() && ['super_admin', 'school_admin', 'principal', 'vice_principal', 'admin_officer', 'teacher', 'class_teacher'].hasAny([getUserData().role]);
+}
+
+function isAdminStaff() {
+  return isAuthenticated() && ['super_admin', 'school_admin', 'principal', 'vice_principal', 'admin_officer'].hasAny([getUserData().role]);
+}
+
+match /users/{userId} {
+  allow read: if isAuthenticated() && (
+    isSuperAdmin() ||
+    request.auth.uid == userId ||
+    getUserData().schoolId == resource.data.schoolId ||
+    (getUserData().schoolId == '' && resource.data.schoolId == '') ||
+    (isSchoolStaff() && resource.data.schoolId == getUserData().schoolId) ||
+    (isSchoolStaff() && resource.data.schoolId == '' && getUserData().schoolId == '')
+  );
+  allow create: if isAuthenticated();
+  allow update: if isAuthenticated() && (
+    request.auth.uid == userId ||
+    isSuperAdmin() ||
+    (isSchoolAdmin(getUserData().schoolId) && resource.data.schoolId == getUserData().schoolId)
+  );
+  allow delete: if isSuperAdmin();
+}
+
+match /schools/{schoolId} {
+  allow read: if isAuthenticated();
+  allow create: if isSuperAdmin();
+  allow update: if isSuperAdmin() || isSchoolAdmin(schoolId);
+  allow delete: if isSuperAdmin();
+}
+
+match /classes/{classId} {
+  allow read: if isAuthenticated();
+  allow create: if isInRole(['super_admin', 'school_admin', 'principal']);
+  allow update: if isInRole(['super_admin', 'school_admin', 'principal']);
+  allow delete: if isSuperAdmin();
+}
+
+match /sections/{sectionId} {
+  allow read: if isAuthenticated();
+  allow write: if isInRole(['super_admin', 'school_admin', 'principal']);
+}
+
+match /subjects/{subjectId} {
+  allow read: if isAuthenticated();
+  allow write: if isInRole(['super_admin', 'school_admin', 'principal']);
+}
+
+match /students/{studentId} {
+  allow read: if isAuthenticated();
+  allow write: if isRole('teacher') || isInRole(['super_admin', 'school_admin', 'principal']);
+}
+
+match /homework/{hwId} {
+  allow read: if isAuthenticated() && (
+    isInRole(['super_admin', 'school_admin', 'principal']) ||
+    isRole('teacher') ||
+    (isRole('student') && (
+      (resource.data.class == getUserData().class && resource.data.section == getUserData().section) ||
+      (resource.data.grade == getUserData().grade && resource.data.section == getUserData().section)
+    )) ||
+    (isRole('parent') && (
+      getUserData().childrenIds.hasAny([resource.data.studentId]) ||
+      getUserData().children.hasAny([resource.data.studentId])
+    ))
+  );
+  allow create: if isRole('teacher');
+  allow update: if isRole('teacher') || isInRole(['school_admin', 'super_admin']);
+  allow delete: if isInRole(['school_admin', 'super_admin']);
+}
+
+match /attendance/{attendanceId} {
+  allow read: if isAuthenticated() && (
+    isInRole(['super_admin', 'school_admin', 'principal']) ||
+    isRole('teacher') ||
+    (isRole('student') && (
+      resource.data.studentId == request.auth.uid ||
+      (resource.data.grade == getUserData().grade && resource.data.section == getUserData().section) ||
+      (resource.data.class == getUserData().class && resource.data.section == getUserData().section)
+    )) ||
+    (isRole('parent') && (
+      getUserData().childrenIds.hasAny([resource.data.studentId]) ||
+      getUserData().children.hasAny([resource.data.studentId]) ||
+      (resource.data.grade && resource.data.section)
+    ))
+  );
+  allow create: if isRole('teacher');
+  allow update: if isRole('teacher') || isInRole(['school_admin', 'super_admin']);
+}
+
+match /results/{resultId} {
+  allow read: if isAuthenticated() && (
+    isInRole(['super_admin', 'school_admin', 'principal']) ||
+    isRole('teacher') ||
+    (isRole('student') && (
+      resource.data.studentId == request.auth.uid ||
+      (resource.data.grade == getUserData().grade && resource.data.section == getUserData().section) ||
+      (resource.data.class == getUserData().class && resource.data.section == getUserData().section)
+    )) ||
+    (isRole('parent') && (
+      getUserData().childrenIds.hasAny([resource.data.studentId]) ||
+      getUserData().children.hasAny([resource.data.studentId]) ||
+      (resource.data.grade && resource.data.section)
+    ))
+  );
+  allow create: if isRole('teacher');
+  allow update: if isRole('teacher') || isInRole(['school_admin', 'super_admin']);
+}
+
+match /assignments/{assignmentId} {
+  allow read: if isAuthenticated();
+  allow create: if isRole('teacher');
+  allow update: if isRole('teacher') || isInRole(['school_admin', 'super_admin']);
+  allow delete: if isInRole(['school_admin', 'super_admin']);
+}
+
+match /groups/{groupId} {
+  allow read: if isAuthenticated() && (
+    resource.data.visibility == 'public' ||
+    (resource.data.visibility == 'private' && resource.data.members.hasAny([request.auth.uid])) ||
+    (resource.data.visibility == 'hidden' && isInRole(['school_admin', 'super_admin', 'principal']))
+  );
+  allow create: if isAuthenticated();
+  allow update: if isAuthenticated() && resource.data.moderators.hasAny([request.auth.uid]);
+  allow delete: if isInRole(['school_admin', 'super_admin']);
+}
+
+match /groups/{groupId}/posts/{postId} {
+  allow read: if isAuthenticated();
+  allow create: if isAuthenticated() && get(/databases/$(database)/documents/groups/$(groupId)).data.members.hasAny([request.auth.uid]);
+  allow update: if isAuthenticated() && (
+    request.auth.uid == resource.data.authorId ||
+    get(/databases/$(database)/documents/groups/$(groupId)).data.moderators.hasAny([request.auth.uid])
+  );
+  allow delete: if isInRole(['school_admin', 'super_admin']) || get(/databases/$(database)/documents/groups/$(groupId)).data.moderators.hasAny([request.auth.uid]);
+}
+
+match /messages/{messageId} {
+  allow read: if isAuthenticated() && (
+    resource.data.senderId == request.auth.uid ||
+    resource.data.receiverId == request.auth.uid
+  );
+  allow create: if isAuthenticated();
+  allow update: if isAuthenticated() && resource.data.receiverId == request.auth.uid;
+  allow delete: if isAuthenticated() && resource.data.senderId == request.auth.uid;
+}
+
+match /notifications/{notificationId} {
+  allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+  allow create: if isAuthenticated();
+  allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+  allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+}
+
+match /fees/{feeId} {
+  allow read: if isAuthenticated() && (
+    isInRole(['super_admin', 'school_admin']) ||
+    (isRole('parent') && (
+      getUserData().childrenIds.hasAny([resource.data.studentId]) ||
+      getUserData().children.hasAny([resource.data.studentId])
+    )) ||
+    (isRole('student') && resource.data.studentId == request.auth.uid)
+  );
+  allow write: if isInRole(['super_admin', 'school_admin']);
+}
+
+match /achievements/{achievementId} {
+  allow read: if isAuthenticated();
+  allow create: if isAuthenticated();
+  allow update: if isAuthenticated() && resource.data.userId == request.auth.uid;
+}
+
+match /quizzes/{quizId} {
+  allow read: if isAuthenticated();
+  allow create: if isRole('teacher');
+  allow update: if isRole('teacher') || isInRole(['school_admin', 'super_admin']);
+  allow delete: if isRole('teacher') || isInRole(['school_admin', 'super_admin']);
+}
+
+match /notices/{noticeId} {
+  allow read: if isAuthenticated();
+  allow create: if isInRole(['teacher', 'principal', 'school_admin', 'super_admin']);
+  allow update: if isInRole(['principal', 'school_admin', 'super_admin']);
+  allow delete: if isInRole(['school_admin', 'super_admin']);
+}
+
+match /files/{fileId} {
+  allow read: if isAuthenticated();
+  allow create: if isAuthenticated();
+  allow delete: if isAuthenticated() && (isSuperAdmin() || resource.data.uploadedBy == request.auth.uid);
+}
+
+match /moderationLogs/{logId} {
+  allow read: if isInRole(['super_admin', 'school_admin', 'principal']);
+  allow create: if isInRole(['super_admin', 'school_admin']);
+  allow delete: if isSuperAdmin();
+}
+
+match /reports/{reportId} {
+  allow read: if isInRole(['super_admin', 'school_admin', 'principal']);
+  allow create: if isAuthenticated();
+  allow update: if isInRole(['super_admin', 'school_admin']);
+  allow delete: if isInRole(['super_admin', 'school_admin']);
+}
+
+match /subscriptionPlans/{planId} {
+  allow read: if isAuthenticated();
+  allow create: if isSuperAdmin();
+  allow update: if isSuperAdmin();
+  allow delete: if isSuperAdmin();
+}
+
+match /activityLog/{entryId} {
+  allow read: if isInRole(['super_admin', 'school_admin']);
+  allow create: if isAuthenticated();
+}
+
+match /events/{eventId} {
+  allow read: if isAuthenticated();
+  allow write: if isInRole(['super_admin', 'school_admin', 'principal']);
+}
+
+match /announcements/{announcementId} {
+  allow read: if isAuthenticated();
+  allow write: if isInRole(['super_admin', 'school_admin', 'principal']);
+}
+
+match /feeStructures/{feeId} {
+  allow read: if isAuthenticated() && (isInRole(['super_admin', 'school_admin']) || isRole('parent'));
+  allow write: if isInRole(['super_admin', 'school_admin']);
+}
+
+match /feeRecords/{recordId} {
+  allow read: if isAuthenticated() && (isInRole(['super_admin', 'school_admin']) || resource.data.studentId == request.auth.uid);
+  allow write: if isInRole(['super_admin', 'school_admin']);
+}
+
+match /timetables/{classId} {
+  allow read: if isAuthenticated();
+  allow write: if isInRole(['super_admin', 'school_admin', 'principal']);
+}
+
+match /exams/{examId} {
+  allow read: if isAuthenticated();
+  allow create: if isInRole(['super_admin', 'school_admin', 'teacher']);
+  allow update: if isInRole(['super_admin', 'school_admin', 'teacher']);
+  allow delete: if isInRole(['super_admin', 'school_admin', 'teacher']);
+}
+
+match /marks/{markId} {
+  allow read: if isAuthenticated();
+  allow create: if isInRole(['super_admin', 'school_admin', 'teacher']);
+  allow update: if isInRole(['super_admin', 'school_admin', 'teacher']);
+  allow delete: if isInRole(['super_admin', 'school_admin', 'teacher']);
+}
+
+match /records/{recordId} {
+  allow read: if isAuthenticated();
+  allow create: if isInRole(['super_admin', 'school_admin', 'teacher']);
+  allow update: if isInRole(['super_admin', 'school_admin', 'teacher']);
+  allow delete: if isInRole(['super_admin', 'school_admin', 'teacher']);
+}
+
+match /settings/{schoolId} {
+  allow read: if isAuthenticated() && (isSuperAdmin() || getUserData().schoolId == schoolId);
+  allow write: if isAuthenticated() && (isSuperAdmin() || (isInRole(['school_admin', 'principal']) && getUserData().schoolId == schoolId));
+}
+
+  }
+}
